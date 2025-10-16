@@ -1,42 +1,58 @@
-// Live Scoreboard (Google Sheets) – Drop-in React component for Next.js
-// ---------------------------------------------------------------
-// What this does
-// - Fetches rows from a Google Sheet (either a published CSV URL OR Sheets API v4)
-// - Expects headers like: Name, Photo, Score (or customize below)
-// - Renders presenter cards with image, average score, votes, and live ranking
-// - Auto-refreshes every 10 seconds (configurable)
-// - Mobile-friendly, clean Tailwind UI
-//
-// How to use (fastest path: Published CSV)
-// 1) In Google Sheets: File → Share → Publish to web → Entire sheet → CSV. Copy the URL.
-// 2) Paste it into the SHEET_CSV_URL below (or pass via props).
-// 3) Import this component into a Next.js page (app or pages router) and render it.
-//    Example: <Scoreboard csvUrl={"https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"} />
-//
-// Using private sheets (API key):
-// - Create a Google Cloud API key with Sheets API enabled.
-// - Note your SHEET_ID (the long id in the sheet URL) and RANGE (e.g., "Sheet1!A1:D").
-// - Provide apiKey, sheetId, and range props instead of csvUrl.
-//   Example: <Scoreboard apiKey={process.env.NEXT_PUBLIC_GSHEETS_API_KEY} sheetId={"1AbC..."} range={"Sheet1!A1:D"} />
-//
-// Customize column headers below (NAME_COL, PHOTO_COL, SCORE_COL, VOTES_COL)
-// to match your sheet headers exactly.
-// ---------------------------------------------------------------
 "use client";
+
+// Live Scoreboard (Google Sheets) – Local photos, sheet-driven scores
+// ------------------------------------------------------------------
+// What this does
+// - Fetches rows from a Google Sheet (Published CSV OR Sheets API v4)
+// - Expects headers: Name, Score
+// - Aggregates per person (Total/Sum by default; can switch to Average)
+// - Renders cards with local images + names + rank + votes count
+// - Auto-refreshes every 10 seconds
+//
+// Quick usage (Published CSV - easiest):
+// <Scoreboard
+//   title="Presentation Scores"
+//   csvUrl="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+// />
+//
+// If you need private Sheets:
+// <Scoreboard
+//   title="Presentation Scores"
+//   apiKey={process.env.NEXT_PUBLIC_GSHEETS_API_KEY!}
+//   sheetId="1AbC..."
+//   range="Sheet1!A1:B" // include headers row (Name, Score)
+// />
+//
+// IMPORTANT:
+// - The sheet's "Name" must match the keys in PHOTO_BY_NAME exactly.
+// - Your local images live under /public. Example here uses "/Muhasin TP.JPG".
+//
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// ---- Configuration ----
+// ---- Scoreboard config (edit to taste) ----
 const REFRESH_MS = 10_000; // auto-refresh every 10 seconds
-const NAME_COL = "Name";   // header for presenter name
-const PHOTO_COL = "Photo"; // header for photo URL (can be empty)
-const SCORE_COL = "Score"; // header for numeric score (1–10) or average; supports non-numeric rows gracefully
-const VOTES_COL = "Votes"; // header for vote count (optional)
+const NAME_COL = "Name";   // Sheet header for presenter name
+const SCORE_COL = "Score"; // Sheet header for numeric score (1–10)
 
-// Utility: tiny CSV parser (handles quotes, commas, and newlines)
+// Choose how to rank:
+//  - "sum" => total score across all votes
+//  - "avg" => average score across votes
+const DISPLAY_METRIC: "sum" | "avg" = "sum";
+const DISPLAY_LABEL = DISPLAY_METRIC === "sum" ? "Total" : "Average";
+
+// Map local photos by EXACT sheet name (case/spacing must match)
+const PHOTO_BY_NAME: Record<string, string> = {
+  "Muhasin TP": "/Muhasin%20TP.JPG", // your file in /public
+  // Add more presenters here:
+  // "Alice Chen": "/photos/alice.jpg",
+  // "Bob Kumar": "/photos/bob.jpg",
+};
+
+// ---- Utility: tiny CSV parser (handles quotes, commas, and newlines) ----
 function parseCSV(csvText: string): string[][] {
   const rows: string[][] = [];
-  let i = 0, cur = '' as string, row: string[] = [], inQuotes = false;
+  let i = 0, cur = "" as string, row: string[] = [], inQuotes = false;
   while (i < csvText.length) {
     const c = csvText[i];
     if (inQuotes) {
@@ -48,9 +64,9 @@ function parseCSV(csvText: string): string[][] {
       }
     } else {
       if (c === '"') inQuotes = true;
-      else if (c === ',') { row.push(cur); cur = ''; }
-      else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
-      else if (c === '\r') { /* ignore */ }
+      else if (c === ",") { row.push(cur); cur = ""; }
+      else if (c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; }
+      else if (c === "\r") { /* ignore */ }
       else { cur += c; }
     }
     i++;
@@ -71,20 +87,18 @@ function withRanks<T extends { scoreNum: number }>(items: T[]) {
   });
 }
 
-// Fetchers
+// ---- Fetchers ----
 async function fetchFromCSV(csvUrl: string) {
   const res = await fetch(csvUrl, { cache: "no-store" });
   if (!res.ok) throw new Error(`CSV fetch failed: ${res.status}`);
   const text = await res.text();
   const rows = parseCSV(text);
   const [header, ...data] = rows;
-  const headerIdx: Record<string, number> = {};
-  header.forEach((h, i) => headerIdx[h.trim()] = i);
+  const idx: Record<string, number> = {};
+  header.forEach((h, i) => (idx[h.trim()] = i));
   return data.map(r => ({
-    name: r[headerIdx[NAME_COL]] ?? "",
-    photo: r[headerIdx[PHOTO_COL]] ?? "",
-    score: r[headerIdx[SCORE_COL]] ?? "",
-    votes: r[headerIdx[VOTES_COL]] ?? "",
+    name: (r[idx[NAME_COL]] ?? "").trim(),
+    score: (r[idx[SCORE_COL]] ?? "").trim(),
   }));
 }
 
@@ -96,19 +110,24 @@ async function fetchFromSheetsApi(apiKey: string, sheetId: string, range: string
   const values: string[][] = json.values || [];
   if (!values.length) return [] as any[];
   const [header, ...data] = values;
-  const headerIdx: Record<string, number> = {};
-  header.forEach((h: string, i: number) => headerIdx[h.trim()] = i);
+  const idx: Record<string, number> = {};
+  header.forEach((h: string, i: number) => (idx[h.trim()] = i));
   return data.map((r: string[]) => ({
-    name: r[headerIdx[NAME_COL]] ?? "",
-    photo: r[headerIdx[PHOTO_COL]] ?? "",
-    score: r[headerIdx[SCORE_COL]] ?? "",
-    votes: r[headerIdx[VOTES_COL]] ?? "",
+    name: (r[idx[NAME_COL]] ?? "").trim(),
+    score: (r[idx[SCORE_COL]] ?? "").trim(),
   }));
 }
 
-// Card component
-function PresenterCard({ rank, name, photo, score, votes }: { rank: number; name: string; photo?: string; score: string; votes?: string; }) {
-  const initials = useMemo(() => name.split(" ").map(s => s[0]).join("").slice(0,2).toUpperCase(), [name]);
+// ---- UI ----
+function PresenterCard({
+  rank, name, photo, score, votes,
+}: {
+  rank: number; name: string; photo?: string; score: string; votes?: string;
+}) {
+  const initials = useMemo(
+    () => name.split(" ").map(s => s[0]).join("").slice(0, 2).toUpperCase(),
+    [name]
+  );
   return (
     <div className="group relative rounded-2xl shadow-sm hover:shadow-lg transition p-4 bg-white border border-gray-100">
       <div className="absolute -top-3 -left-3 bg-black text-white text-sm font-semibold rounded-xl px-3 py-1">#{rank}</div>
@@ -125,6 +144,7 @@ function PresenterCard({ rank, name, photo, score, votes }: { rank: number; name
           <div className="text-lg font-semibold truncate">{name || "Unnamed"}</div>
           <div className="mt-1 flex items-center gap-3">
             <span className="text-2xl font-bold tabular-nums">{score}</span>
+            <span className="text-xs text-gray-400">{DISPLAY_LABEL}</span>
             {votes ? <span className="text-sm text-gray-500">{votes} votes</span> : null}
           </div>
         </div>
@@ -147,25 +167,43 @@ export default function Scoreboard(props: {
   const fetchData = async () => {
     try {
       setError(null);
-      let data: any[] = [];
-      if (csvUrl) data = await fetchFromCSV(csvUrl);
-      else if (apiKey && sheetId && range) data = await fetchFromSheetsApi(apiKey, sheetId, range);
+      let raw: { name: string; score: string; }[] = [];
+
+      if (csvUrl) raw = await fetchFromCSV(csvUrl);
+      else if (apiKey && sheetId && range) raw = await fetchFromSheetsApi(apiKey, sheetId, range);
       else throw new Error("Provide csvUrl OR apiKey+sheetId+range");
 
-      // Normalize & clean
-      const cleaned = data.map((d) => {
-        const scoreNum = Number(String(d.score).replace(/,/g, '.'));
-        const votesNum = d.votes !== undefined && d.votes !== "" ? Number(d.votes) : undefined;
-        return {
-          name: (d.name || "").trim(),
-          photo: (d.photo || "").trim(),
-          score: isFinite(scoreNum) ? scoreNum.toFixed(2) : "—",
-          scoreNum: isFinite(scoreNum) ? scoreNum : -Infinity,
-          votes: votesNum !== undefined && isFinite(votesNum) ? String(votesNum) : undefined,
-        };
-      }).filter(r => r.name);
+      // Aggregate per person
+      type Agg = { total: number; count: number };
+      const map = new Map<string, Agg>();
 
-      const ranked = withRanks(cleaned);
+      for (const r of raw) {
+        if (!r.name) continue;
+        const scoreNum = Number(String(r.score).replace(/,/g, "."));
+        if (!Number.isFinite(scoreNum)) continue;
+
+        const key = r.name;
+        const cur = map.get(key) ?? { total: 0, count: 0 };
+        cur.total += scoreNum;
+        cur.count += 1;
+        map.set(key, cur);
+      }
+
+      const aggregated = Array.from(map.entries()).map(([name, agg]) => {
+        const scoreNum =
+          DISPLAY_METRIC === "sum" ? agg.total : agg.total / Math.max(1, agg.count);
+        const display =
+          DISPLAY_METRIC === "sum" ? scoreNum.toFixed(0) : scoreNum.toFixed(2);
+        return {
+          name,
+          photo: PHOTO_BY_NAME[name] || "",
+          score: display,
+          scoreNum,
+          votes: String(agg.count),
+        };
+      });
+
+      const ranked = withRanks(aggregated);
       setRows(ranked as any);
     } catch (e: any) {
       setError(e.message || "Failed to load data");
@@ -178,7 +216,7 @@ export default function Scoreboard(props: {
     fetchData();
     timerRef.current = window.setInterval(fetchData, REFRESH_MS);
     return () => { if (timerRef.current) window.clearInterval(timerRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [csvUrl, apiKey, sheetId, range]);
 
   const top3 = useMemo(() => rows.slice(0, 3), [rows]);
@@ -188,14 +226,14 @@ export default function Scoreboard(props: {
       <div className="max-w-6xl mx-auto px-4 py-8">
         <header className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl md:text-3xl font-bold">{title}</h1>
-          <div className="text-sm text-gray-500">Auto-updates every {REFRESH_MS/1000}s</div>
+          <div className="text-sm text-gray-500">Auto-updates every {REFRESH_MS / 1000}s</div>
         </header>
 
-        {loading && (
-          <div className="animate-pulse text-gray-500">Loading scores…</div>
-        )}
+        {loading && <div className="animate-pulse text-gray-500">Loading scores…</div>}
         {error && (
-          <div className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">{error}</div>
+          <div className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
+            {error}
+          </div>
         )}
 
         {rows.length > 0 && (
@@ -224,26 +262,9 @@ export default function Scoreboard(props: {
         )}
 
         {!loading && rows.length === 0 && !error && (
-          <div className="text-gray-600">No rows found. Check your sheet headers and data.</div>
+          <div className="text-gray-600">No rows found. Make sure your sheet has headers: "{NAME_COL}", "{SCORE_COL}".</div>
         )}
       </div>
     </div>
   );
 }
-
-// Example Next.js page (App Router):
-// Create app/scoreboard/page.tsx and paste:
-//
-// import Scoreboard from "@/components/Scoreboard"; // or the path where you place this file
-// export default function Page() {
-//   return (
-//     <Scoreboard
-//       title="Presentation Scores"
-//       csvUrl="https://docs.google.com/spreadsheets/d/e/XXXX/pub?output=csv"
-//       // OR for private sheets:
-//       // apiKey={process.env.NEXT_PUBLIC_GSHEETS_API_KEY!}
-//       // sheetId="1AbCdef..."
-//       // range="Sheet1!A1:D"
-//     />
-//   );
-// }
