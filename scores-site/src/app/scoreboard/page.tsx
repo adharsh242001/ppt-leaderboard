@@ -7,7 +7,7 @@ export default function Page() {
       // Use one of these (not both):
 
       // Public CSV (easiest)
-      csvUrl="https://docs.google.com/spreadsheets/d/e/XXXX/pub?output=csv"
+      csvUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vTTGLO0aYsEDRX2zaPeDnGEbbJzupwP9gRwZCwX8Z2zxo6btmsmJ4Cvi1mnJ3_hCuaNQsJb-NMpVhVf/pubhtml"
 
       // Private Sheets API
       // apiKey={process.env.NEXT_PUBLIC_GSHEETS_API_KEY!}

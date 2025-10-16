@@ -22,6 +22,7 @@
 // Customize column headers below (NAME_COL, PHOTO_COL, SCORE_COL, VOTES_COL)
 // to match your sheet headers exactly.
 // ---------------------------------------------------------------
+"use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
