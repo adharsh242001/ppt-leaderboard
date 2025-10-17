@@ -146,7 +146,6 @@ function PresenterCard({
       </div>
       <div className="flex items-center gap-6">
         {photo ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img src={photo} alt={name} className="h-24 w-24 rounded-xl object-cover" />
         ) : (
           <div className="h-24 w-24 rounded-xl bg-gray-100 grid place-items-center text-gray-700 font-semibold">
@@ -200,6 +199,7 @@ export default function Scoreboard(props: {
         sum: r.sum.trim(),
         count: r.count.trim(),
         avg: r.avg.trim(),
+        scoreNum: parseFloat(r.sum) || 0, // Adding scoreNum (for example, as the numeric sum)
       }));
 
       const ranked = withRanks(aggregated);
@@ -215,7 +215,6 @@ export default function Scoreboard(props: {
     fetchData();
     timerRef.current = window.setInterval(fetchData, REFRESH_MS);
     return () => { if (timerRef.current) window.clearInterval(timerRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [csvUrl, apiKey, sheetId, range]);
 
   const top3 = useMemo(() => rows.slice(0, 3), [rows]);
